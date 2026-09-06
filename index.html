@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>宇宙BP - 英雄联盟风格自定义对战</title>
+
+    <!-- Firebase SDK (compat 模式) -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+
     <style>
         :root {
             --bg-deep: #010a14;
@@ -1066,7 +1071,23 @@
 </head>
 <body>
     <div id="app"></div>
+
     <script>
+        // ===================== Firebase 配置 =====================
+        // 已填入您提供的配置
+        const firebaseConfig = {
+            apiKey: "AIzaSyB_AyxIbK-sAhBQ1BXeSj5Q_KfsFlwEXjg",
+            authDomain: "yuzhoubp.firebaseapp.com",
+            projectId: "yuzhoubp",
+            storageBucket: "yuzhoubp.firebasestorage.app",
+            messagingSenderId: "892087268435",
+            appId: "1:892087268435:web:1ec592b7c64d6c0b8ec2a6"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const HEROES_DOC = db.collection('heroes').doc('heroPool');
+        // =====================================================
+
         (function() {
             const STEPS = [
                 { type: 'ban', side: 'blue', num: 1, round: 1 },
@@ -1089,8 +1110,12 @@
                 { type: 'pick', side: 'red', num: 10, round: 2 },
             ];
 
-            const TAG_WEIGHTS = { '武力': 20, '力量': 18, '智谋': 20, '速度': 12, '神圣': 22, '魔法': 16, '科技': 16, '自然': 14, '火': 15, '水': 15, '冰': 14, '雷': 16, '暗': 14, '光': 18, '英雄': 12, '反派': 10, '人类': 8, '神': 22, '妖': 12, '歌手': 10, '搞笑': 6, '莽夫': 8, '辅助': 10, '战士': 15, '射手': 14, '刺客': 16, '坦克': 16, '法师': 17 };
-            const TAG_COUNTERS = { '神圣': ['反派', '妖'], '音系': ['歌手'], '智谋': ['莽夫'], '时间': ['力量'], '火': ['冰'], '冰': ['火'], '水': ['火'], '光': ['暗'], '暗': ['光'] };
+            const TAG_WEIGHTS = { '武力': 20, '力量': 18, '智谋': 20, '速度': 12, '神圣': 22, '魔法': 16, '科技': 16,
+                '自然': 14, '火': 15, '水': 15, '冰': 14, '雷': 16, '暗': 14, '光': 18, '英雄': 12, '反派': 10, '人类': 8,
+                '神': 22, '妖': 12, '歌手': 10, '搞笑': 6, '莽夫': 8, '辅助': 10, '战士': 15, '射手': 14, '刺客': 16, '坦克': 16,
+                '法师': 17 };
+            const TAG_COUNTERS = { '神圣': ['反派', '妖'], '音系': ['歌手'], '智谋': ['莽夫'], '时间': ['力量'], '火': ['冰'],
+                '冰': ['火'], '水': ['火'], '光': ['暗'], '暗': ['光'] };
 
             let state = {
                 phase: 'setup',
@@ -1106,26 +1131,55 @@
                 allHeroes: [],
                 categories: [],
                 activeCategoryFilter: null,
+                isCloudLoaded: false,
             };
 
-            function loadHeroes() {
-                try { state.allHeroes = JSON.parse(localStorage.getItem('cosmicBP_heroes_v4') || '[]'); } catch (e) { state.allHeroes = []; }
-                try { state.categories = JSON.parse(localStorage.getItem('cosmicBP_categories_v4') || '[]'); } catch (e) { state.categories = []; }
-                state.allHeroes.forEach(h => { if (h.category && !state.categories.includes(h.category)) state.categories.push(h.category); });
-                saveCategories();
+            function extractCategories() {
+                const cats = new Set();
+                state.allHeroes.forEach(h => { if (h.category) cats.add(h.category); });
+                state.categories = Array.from(cats).sort();
             }
 
-            function saveHeroes() { try { localStorage.setItem('cosmicBP_heroes_v4', JSON.stringify(state.allHeroes)); } catch (e) {} }
+            async function loadHeroes() {
+                try {
+                    const doc = await HEROES_DOC.get();
+                    if (doc.exists) {
+                        state.allHeroes = doc.data().list || [];
+                    } else {
+                        state.allHeroes = [];
+                    }
+                } catch (e) {
+                    console.error('加载英雄失败', e);
+                    state.allHeroes = [];
+                }
+                extractCategories();
+                state.isCloudLoaded = true;
+                render();
+            }
 
-            function saveCategories() { try { localStorage.setItem('cosmicBP_categories_v4', JSON.stringify(state.categories)); } catch (e) {} }
+            async function saveHeroes() {
+                try {
+                    await HEROES_DOC.set({ list: state.allHeroes });
+                } catch (e) {
+                    console.error('保存英雄失败', e);
+                }
+            }
+
+            function startRealtimeSync() {
+                HEROES_DOC.onSnapshot((doc) => {
+                    if (doc.exists) {
+                        state.allHeroes = doc.data().list || [];
+                        extractCategories();
+                        if (state.isCloudLoaded) render();
+                    }
+                });
+            }
 
             function getSortedHeroes() { let h = [...state.allHeroes];
                 h.sort((a, b) => a.name.localeCompare(b.name, 'zh')); return h; }
 
-            function getAllCategories() { const c = new Set();
-                state.allHeroes.forEach(h => { if (h.category) c.add(h.category); }); return Array.from(c).sort(); }
-
-            function getFilteredHeroes() { let h = getSortedHeroes(); if (state.activeCategoryFilter) h = h.filter(x => x.category === state.activeCategoryFilter); return h; }
+            function getFilteredHeroes() { let h = getSortedHeroes(); if (state.activeCategoryFilter) h = h.filter(x => x
+                    .category === state.activeCategoryFilter); return h; }
 
             function getCurrentStep() { return state.currentStep < STEPS.length ? STEPS[state.currentStep] : null; }
 
@@ -1133,15 +1187,18 @@
 
             function canAct(side) { const s = getCurrentStep(); return state.phase === 'bp' && s && s.side === side; }
 
-            function addLog(msg, type) { state.logs.push({ msg, type: type || 'system' }); if (state.logs.length > 150) state.logs.shift(); }
+            function addLog(msg, type) { state.logs.push({ msg, type: type || 'system' }); if (state.logs.length > 150) state
+                    .logs.shift(); }
 
             function generateId() { return 'h_' + Date.now() + '_' + Math.floor(Math.random() * 99999); }
 
-            function getColorFromName(name) { let hash = 0; for (let i = 0; i < name.length; i++) { hash = name.charCodeAt(i) + ((hash << 5) - hash); } const hue = Math.abs(hash) % 360; return 'hsl(' + hue + ',65%,55%)'; }
+            function getColorFromName(name) { let hash = 0; for (let i = 0; i < name.length; i++) { hash = name.charCodeAt(
+                    i) + ((hash << 5) - hash); } const hue = Math.abs(hash) % 360; return 'hsl(' + hue + ',65%,55%)'; }
 
             function shortName(n) { return n && n.length > 6 ? n.slice(0, 6) + '…' : n || '?'; }
 
-            function getScoreClass(r) { return r === '臭手' ? 'score-stinky' : r === '神之一手' ? 'score-divine' : r === '妙手' ? 'score-brilliant' : 'score-normal'; }
+            function getScoreClass(r) { return r === '臭手' ? 'score-stinky' : r === '神之一手' ? 'score-divine' : r ===
+                    '妙手' ? 'score-brilliant' : 'score-normal'; }
 
             function ratePick(hero, side, pickNum) {
                 let s = Math.floor(Math.random() * 20) + 35;
@@ -1151,12 +1208,15 @@
                 s += Math.round(tb);
                 const enemy = side === 'blue' ? state.redPicks : state.bluePicks;
                 let cb = 0;
-                enemy.forEach(ep => { (ep.tags || []).forEach(et => { if (TAG_COUNTERS[tags[0]] && TAG_COUNTERS[tags[0]].includes(et)) cb += 15; if (TAG_COUNTERS[et] && TAG_COUNTERS[et].includes(tags[0])) cb -= 15; }); });
+                enemy.forEach(ep => { (ep.tags || []).forEach(et => { if (TAG_COUNTERS[tags[0]] && TAG_COUNTERS[tags[0]]
+                            .includes(et)) cb += 15; if (TAG_COUNTERS[et] && TAG_COUNTERS[et].includes(tags[0])) cb -=
+                        15; }); });
                 s += cb;
                 const ally = side === 'blue' ? state.bluePicks : state.redPicks;
                 let ov = 0;
                 ally.forEach(ap => { (ap.tags || []).forEach(t => { if (tags.includes(t)) ov++; }); });
-                if (ov >= 2) s += 10; else if (ov === 1) s += 5;
+                if (ov >= 2) s += 10;
+                else if (ov === 1) s += 5;
                 if (side === 'red' && pickNum === 10) s += 12;
                 s = Math.max(10, Math.min(99, s));
                 return { score: Math.round(s), rating: s < 30 ? '臭手' : s < 55 ? '普通' : s < 75 ? '妙手' : '神之一手' };
@@ -1166,7 +1226,9 @@
                 let total = 0;
                 team.forEach(h => { let p = 35;
                     (h.tags || []).forEach(t => p += (TAG_WEIGHTS[t] || 5)); let cb = 0;
-                    enemy.forEach(ep => { (ep.tags || []).forEach(et => { if (TAG_COUNTERS[h.tags[0]] && TAG_COUNTERS[h.tags[0]].includes(et)) cb += 10; if (TAG_COUNTERS[et] && TAG_COUNTERS[et].includes(h.tags[0])) cb -= 8; }); });
+                    enemy.forEach(ep => { (ep.tags || []).forEach(et => { if (TAG_COUNTERS[h.tags[0]] && TAG_COUNTERS[h
+                                    .tags[0]].includes(et)) cb += 10; if (TAG_COUNTERS[et] && TAG_COUNTERS[et]
+                                .includes(h.tags[0])) cb -= 8; }); });
                     p += cb;
                     total += p; });
                 return Math.max(10, total);
@@ -1189,10 +1251,12 @@
                         rd = Math.max(2, (ba - rp * 0.3) / Math.max(bp, 1) * 22);
                     bhp -= bd;
                     rhp -= rd;
-                    log.push('⚔️ 第' + r + '回合 | 蓝伤' + rd.toFixed(1) + ' 红伤' + bd.toFixed(1) + ' | 蓝HP:' + Math.max(0, bhp).toFixed(0) + ' 红HP:' + Math.max(0, rhp).toFixed(0));
+                    log.push('⚔️ 第' + r + '回合 | 蓝伤' + rd.toFixed(1) + ' 红伤' + bd.toFixed(1) + ' | 蓝HP:' + Math.max(0,
+                        bhp).toFixed(0) + ' 红HP:' + Math.max(0, rhp).toFixed(0));
                     if (bhp <= 0 || rhp <= 0) break;
                 }
-                const res = bhp <= 0 && rhp <= 0 ? 'draw' : bhp <= 0 ? 'red' : rhp <= 0 ? 'blue' : bhp > rhp ? 'blue' : bhp < rhp ? 'red' : 'draw';
+                const res = bhp <= 0 && rhp <= 0 ? 'draw' : bhp <= 0 ? 'red' : rhp <= 0 ? 'blue' : bhp > rhp ? 'blue' :
+                    bhp < rhp ? 'red' : 'draw';
                 return { result: res, battleLog: log, bluePower: bp, redPower: rp };
             }
 
@@ -1203,11 +1267,16 @@
                 let pt = '',
                     pc = '';
                 if (state.phase === 'setup') { pt = '⚙️ 准备阶段';
-                    pc = 'done'; } else if (state.phase === 'bp') { pt = (step ? (step.side === 'blue' ? '🔵 蓝方' : '🔴 红方') + ' ' + (step.type === 'ban' ? 'BAN' : 'PICK') + ' #' + step.num : 'BP阶段');
-                    pc = step ? (step.side === 'blue' ? 'blue-turn' : 'red-turn') : 'done'; } else if (state.phase === 'done') { pt = '✅ BP完成';
+                    pc = 'done'; } else if (state.phase === 'bp') { pt = (step ? (step.side === 'blue' ? '🔵 蓝方' :
+                            '🔴 红方') + ' ' + (step.type === 'ban' ? 'BAN' : 'PICK') + ' #' + step.num : 'BP阶段');
+                    pc = step ? (step.side === 'blue' ? 'blue-turn' : 'red-turn') : 'done'; } else if (state.phase ===
+                    'done') { pt = '✅ BP完成';
                     pc = 'done'; } else { pt = '⚔️ 对战推演';
                     pc = 'done'; }
-                let html = '<div class="top-bar"><div class="game-title">🌌 宇宙BP</div><div class="phase-display ' + pc + '">' + pt + '</div><div class="hero-pool-info">英雄池 <strong>' + state.allHeroes.length + '</strong></div></div>';
+                let html =
+                    '<div class="top-bar"><div class="game-title">🌌 宇宙BP</div><div class="phase-display ' + pc + '">' +
+                    pt + '</div><div class="hero-pool-info">英雄池 <strong>' + state.allHeroes.length +
+                    '</strong></div></div>';
                 if (state.phase === 'setup') html += renderSetup();
                 else if (state.phase === 'bp') html += renderBP();
                 else if (state.phase === 'done') html += renderDone();
@@ -1217,41 +1286,58 @@
             }
 
             function renderSetup() {
-                let html = '<div class="modal-overlay"><div class="modal" style="max-width:760px;"><h2>🌌 宇宙BP · 英雄池管理</h2><p style="text-align:center;color:var(--text-secondary);font-size:0.9rem;margin-bottom:12px;">创建你的自定义英雄池，然后开始BP对战</p><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:10px 0;"><button class="btn btn-gold" id="btnAddHeroSetup">➕ 添加英雄</button><button class="btn btn-gray" id="btnClearAll">🗑️ 清空英雄池</button><button class="btn btn-gray" id="btnExport">📋 导出英雄</button></div>';
+                let html =
+                    '<div class="modal-overlay"><div class="modal" style="max-width:760px;"><h2>🌌 宇宙BP · 英雄池管理</h2><p style="text-align:center;color:var(--text-secondary);font-size:0.9rem;margin-bottom:12px;">创建你的自定义英雄池，然后开始BP对战（云端共享）</p><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:10px 0;"><button class="btn btn-gold" id="btnAddHeroSetup">➕ 添加英雄</button><button class="btn btn-gray" id="btnClearAll">🗑️ 清空英雄池</button><button class="btn btn-gray" id="btnExport">📋 导出英雄</button></div>';
                 if (state.allHeroes.length > 0) {
-                    html += '<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-dark);border-radius:6px;padding:10px;display:flex;flex-wrap:wrap;gap:6px;">';
+                    html +=
+                        '<div style="max-height:220px;overflow-y:auto;border:1px solid var(--border-dark);border-radius:6px;padding:10px;display:flex;flex-wrap:wrap;gap:6px;">';
                     getSortedHeroes().forEach(h => {
-                        html += '<span style="background:var(--bg-card);border-radius:5px;padding:5px 10px;font-size:0.78rem;display:flex;align-items:center;gap:5px;border:1px solid var(--border-dark);">' +
-                            (h.avatar ? '<img src="' + h.avatar + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;object-position:top center;">' : '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' + getColorFromName(h.name) + ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + h.name.charAt(0) + '</span>') +
-                            h.name + ' <span style="color:var(--text-dim);font-size:0.6rem;">' + (h.category || '') + '</span>' +
-                            '<button class="edit-btn-small" data-edit-id="' + h.id + '" style="background:none;border:none;color:#888;cursor:pointer;font-size:0.7rem;margin-left:4px;">✏️</button>' +
+                        html +=
+                            '<span style="background:var(--bg-card);border-radius:5px;padding:5px 10px;font-size:0.78rem;display:flex;align-items:center;gap:5px;border:1px solid var(--border-dark);">' +
+                            (h.avatar ? '<img src="' + h.avatar +
+                                '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;object-position:top center;">' :
+                                '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' +
+                                getColorFromName(h.name) +
+                                ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + h.name.charAt(
+                                    0) + '</span>') +
+                            h.name + ' <span style="color:var(--text-dim);font-size:0.6rem;">' + (h.category || '') +
+                            '</span>' +
+                            '<button class="edit-btn-small" data-edit-id="' + h.id +
+                            '" style="background:none;border:none;color:#888;cursor:pointer;font-size:0.7rem;margin-left:4px;">✏️</button>' +
                             '<button class="del-btn-small" data-del-id="' + h.id + '" title="删除英雄">🗑️</button></span>';
                     });
                     html += '</div>';
                 } else {
-                    html += '<div style="text-align:center;padding:30px;border:2px dashed var(--border-dark);border-radius:8px;color:var(--text-dim);">英雄池为空，请点击「添加英雄」创建角色</div>';
+                    html +=
+                        '<div style="text-align:center;padding:30px;border:2px dashed var(--border-dark);border-radius:8px;color:var(--text-dim);">英雄池为空，请点击「添加英雄」创建角色</div>';
                 }
-                html += '<div style="text-align:center;margin-top:18px;"><button class="btn btn-gold" id="btnStartBP" style="font-size:1.1rem;padding:14px 40px;">🚀 开始BP</button></div></div></div>';
+                html +=
+                    '<div style="text-align:center;margin-top:18px;"><button class="btn btn-gold" id="btnStartBP" style="font-size:1.1rem;padding:14px 40px;">🚀 开始BP</button></div></div></div>';
                 return html;
             }
 
             function renderBP() {
                 const filtered = getFilteredHeroes();
-                const cats = getAllCategories();
+                const cats = state.categories;
                 const step = getCurrentStep();
                 const bannedIds = new Set([...state.blueBans, ...state.redBans].map(h => h.id));
                 const pickedIds = new Set([...state.bluePicks, ...state.redPicks].map(h => h.id));
                 const availCount = filtered.filter(h => !bannedIds.has(h.id) && !pickedIds.has(h.id)).length;
                 let html = '<div class="main-layout">';
-
-                // 蓝方
-                html += '<div class="side-panel blue-panel"><div class="side-header"><span class="team-dot"></span> 蓝方</div><div class="section-label">BAN 位</div><div class="ban-slots">';
+                html +=
+                    '<div class="side-panel blue-panel"><div class="side-header"><span class="team-dot"></span> 蓝方</div><div class="section-label">BAN 位</div><div class="ban-slots">';
                 for (let i = 0; i < 4; i++) {
                     const b = state.blueBans[i];
                     if (b) {
-                        const ah = b.avatar ? '<img src="' + b.avatar + '">' : '<div style="width:100%;height:100%;border-radius:50%;background:' + getColorFromName(b.name) + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' + b.name.charAt(0) + '</div>';
-                        html += '<div class="ban-slot filled-blue"><span class="ban-avatar">' + ah + '</span><span class="ban-label">' + shortName(b.name) + '</span></div>';
-                    } else { html += '<div class="ban-slot"><span class="ban-letter">BAN</span><span class="ban-label">' + (i + 1) + '</span></div>'; }
+                        const ah = b.avatar ? '<img src="' + b.avatar + '">' :
+                            '<div style="width:100%;height:100%;border-radius:50%;background:' + getColorFromName(b
+                                .name) +
+                            ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' +
+                            b.name.charAt(0) + '</div>';
+                        html += '<div class="ban-slot filled-blue"><span class="ban-avatar">' + ah +
+                            '</span><span class="ban-label">' + shortName(b.name) + '</span></div>';
+                    } else { html += '<div class="ban-slot"><span class="ban-letter">BAN</span><span class="ban-label">' +
+                            (i + 1) + '</span></div>'; }
                 }
                 html += '</div><div class="section-label">PICK 阵容</div><div class="pick-slots">';
                 let bp = [...state.bluePicks].sort((a, b) => a.name.localeCompare(b.name, 'zh'));
@@ -1259,49 +1345,81 @@
                     let sc = null;
                     state.pickScores.forEach(s => { if (s.side === 'blue' && s.pickNum === p._pickNum) sc = s; });
                     const cls = sc ? getScoreClass(sc.rating) : 'score-normal';
-                    const ah = p.avatar ? '<img src="' + p.avatar + '">' : '<div style="width:100%;height:100%;background:' + getColorFromName(p.name) + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' + p.name.charAt(0) + '</div>';
-                    html += '<div class="pick-slot filled-blue"><span class="pick-num">#' + p._pickNum + '</span><span class="pick-avatar">' + ah + '</span><span class="pick-name">' + p.name + '</span>' + (sc ? '<span class="pick-score ' + cls + '">' + sc.rating + ' ' + sc.score + '</span>' : '') + '</div>';
+                    const ah = p.avatar ? '<img src="' + p.avatar + '">' :
+                        '<div style="width:100%;height:100%;background:' + getColorFromName(p.name) +
+                        ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' +
+                        p.name.charAt(0) + '</div>';
+                    html += '<div class="pick-slot filled-blue"><span class="pick-num">#' + p._pickNum +
+                        '</span><span class="pick-avatar">' + ah + '</span><span class="pick-name">' + p.name +
+                        '</span>' + (sc ? '<span class="pick-score ' + cls + '">' + sc.rating + ' ' + sc.score +
+                            '</span>' : '') + '</div>';
                 });
-                for (let i = bp.length; i < 5; i++) html += '<div class="pick-slot"><span class="pick-num">-</span><span style="color:var(--text-dim)">待选</span></div>';
+                for (let i = bp.length; i < 5; i++) html +=
+                    '<div class="pick-slot"><span class="pick-num">-</span><span style="color:var(--text-dim)">待选</span></div>';
                 html += '</div></div>';
-
-                // 中央
-                html += '<div class="center-panel"><div class="center-header"><span class="hero-count-label">🎭 英雄池（' + availCount + '可选' + (state.activeCategoryFilter ? ' · ' + state.activeCategoryFilter : '') + '）</span><span class="hint-text">' + (step ? (step.side === 'blue' ? '🔵 蓝方操作中' : '🔴 红方操作中') : '') + '</span><button class="btn-add-hero" id="btnAddHeroBP">➕ 添加英雄</button></div>';
+                html +=
+                    '<div class="center-panel"><div class="center-header"><span class="hero-count-label">🎭 英雄池（' +
+                    availCount + '可选' + (state.activeCategoryFilter ? ' · ' + state.activeCategoryFilter : '') +
+                    '）</span><span class="hint-text">' + (step ? (step.side === 'blue' ? '🔵 蓝方操作中' : '🔴 红方操作中') :
+                        '') + '</span><button class="btn-add-hero" id="btnAddHeroBP">➕ 添加英雄</button></div>';
                 if (cats.length > 0) {
-                    html += '<div class="category-filter-bar" id="catBar"><button class="category-filter-btn' + (state.activeCategoryFilter === null ? ' active' : '') + '" data-cat="">全部</button>';
-                    cats.forEach(c => { html += '<button class="category-filter-btn' + (state.activeCategoryFilter === c ? ' active' : '') + '" data-cat="' + c + '">' + c + '</button>'; });
+                    html += '<div class="category-filter-bar" id="catBar"><button class="category-filter-btn' + (state
+                        .activeCategoryFilter === null ? ' active' : '') + '" data-cat="">全部</button>';
+                    cats.forEach(c => { html += '<button class="category-filter-btn' + (state.activeCategoryFilter ===
+                            c ? ' active' : '') + '" data-cat="' + c + '">' + c + '</button>'; });
                     html += '</div>';
                 }
                 html += '<div class="champion-grid" id="heroGrid">';
                 if (state.allHeroes.length === 0) {
-                    html += '<div class="empty-hero-placeholder"><span class="big-icon">🎭</span><span class="prompt-title">英雄池为空</span><button class="btn btn-gold" id="btnAddHeroEmpty">➕ 添加英雄</button></div>';
+                    html +=
+                        '<div class="empty-hero-placeholder"><span class="big-icon">🎭</span><span class="prompt-title">英雄池为空</span><button class="btn btn-gold" id="btnAddHeroEmpty">➕ 添加英雄</button></div>';
                 } else {
                     filtered.forEach(h => {
                         const isBan = bannedIds.has(h.id);
                         const isPick = pickedIds.has(h.id);
                         const isSel = state.selectedHero && state.selectedHero.id === h.id && !isBan && !isPick;
                         const cls = isBan ? 'banned' : isPick ? 'picked' : isSel ? 'selected' : '';
-                        const ah = h.avatar ? '<img src="' + h.avatar + '">' : '<div style="width:100%;height:100%;background:' + getColorFromName(h.name) + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;">' + h.name.charAt(0) + '</div>';
-                        const delBtn = (!isBan && !isPick) ? '<button class="del-btn" data-del-id="' + h.id + '" title="删除英雄">🗑️</button>' : '';
-                        html += '<div class="champ-card ' + cls + '" data-hero-id="' + h.id + '"><span class="champ-avatar">' + ah + '</span><span class="champ-name">' + shortName(h.name) + '</span><span class="champ-cat">' + (h.category || '') + '</span><span class="champ-tags-mini">' + (h.tags || []).slice(0, 4).join('·') + '</span><button class="edit-btn" data-edit-id="' + h.id + '">✏️</button>' + delBtn + '</div>';
+                        const ah = h.avatar ? '<img src="' + h.avatar + '">' :
+                            '<div style="width:100%;height:100%;background:' + getColorFromName(h.name) +
+                            ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;">' + h
+                            .name.charAt(0) + '</div>';
+                        const delBtn = (!isBan && !isPick) ? '<button class="del-btn" data-del-id="' + h.id +
+                            '" title="删除英雄">🗑️</button>' : '';
+                        html += '<div class="champ-card ' + cls + '" data-hero-id="' + h.id +
+                            '"><span class="champ-avatar">' + ah + '</span><span class="champ-name">' + shortName(h
+                                .name) + '</span><span class="champ-cat">' + (h.category || '') +
+                            '</span><span class="champ-tags-mini">' + (h.tags || []).slice(0, 4).join('·') +
+                            '</span><button class="edit-btn" data-edit-id="' + h.id + '">✏️</button>' + delBtn +
+                            '</div>';
                     });
                 }
                 html += '</div><div class="action-bar">';
-                if (step) html += step.side === 'blue' ? '<button class="btn btn-blue" id="btnConfirmBlue">🔵 确认' + (step.type === 'ban' ? 'Ban' : 'Pick') + '</button>' : '<button class="btn btn-red" id="btnConfirmRed">🔴 确认' + (step.type === 'ban' ? 'Ban' : 'Pick') + '</button>';
-                html += '<span class="hint-text" id="selHint">' + (state.selectedHero ? '✅ 已选：' + state.selectedHero.name : '👆 点击英雄卡片选择') + '</span><button class="btn btn-gray btn-sm" id="btnClearSel">取消</button></div>';
+                if (step) html += step.side === 'blue' ? '<button class="btn btn-blue" id="btnConfirmBlue">🔵 确认' + (
+                    step.type === 'ban' ? 'Ban' : 'Pick') + '</button>' :
+                    '<button class="btn btn-red" id="btnConfirmRed">🔴 确认' + (step.type === 'ban' ? 'Ban' : 'Pick') +
+                    '</button>';
+                html += '<span class="hint-text" id="selHint">' + (state.selectedHero ? '✅ 已选：' + state.selectedHero
+                    .name : '👆 点击英雄卡片选择') +
+                    '</span><button class="btn btn-gray btn-sm" id="btnClearSel">取消</button></div>';
                 html += '<div class="log-area">';
-                state.logs.slice(-15).reverse().forEach(l => { const c = l.type === 'blue' ? 'blue-log' : l.type === 'red' ? 'red-log' : l.type === 'score' ? 'score-log' : 'system-log';
+                state.logs.slice(-15).reverse().forEach(l => { const c = l.type === 'blue' ? 'blue-log' : l.type ===
+                        'red' ? 'red-log' : l.type === 'score' ? 'score-log' : 'system-log';
                     html += '<div class="log-entry ' + c + '">' + l.msg + '</div>'; });
                 html += '</div></div>';
-
-                // 红方
-                html += '<div class="side-panel red-panel"><div class="side-header"><span class="team-dot"></span> 红方</div><div class="section-label">BAN 位</div><div class="ban-slots">';
+                html +=
+                    '<div class="side-panel red-panel"><div class="side-header"><span class="team-dot"></span> 红方</div><div class="section-label">BAN 位</div><div class="ban-slots">';
                 for (let i = 0; i < 4; i++) {
                     const b = state.redBans[i];
                     if (b) {
-                        const ah = b.avatar ? '<img src="' + b.avatar + '">' : '<div style="width:100%;height:100%;border-radius:50%;background:' + getColorFromName(b.name) + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' + b.name.charAt(0) + '</div>';
-                        html += '<div class="ban-slot filled-red"><span class="ban-avatar">' + ah + '</span><span class="ban-label">' + shortName(b.name) + '</span></div>';
-                    } else { html += '<div class="ban-slot"><span class="ban-letter">BAN</span><span class="ban-label">' + (i + 1) + '</span></div>'; }
+                        const ah = b.avatar ? '<img src="' + b.avatar + '">' :
+                            '<div style="width:100%;height:100%;border-radius:50%;background:' + getColorFromName(b
+                                .name) +
+                            ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' +
+                            b.name.charAt(0) + '</div>';
+                        html += '<div class="ban-slot filled-red"><span class="ban-avatar">' + ah +
+                            '</span><span class="ban-label">' + shortName(b.name) + '</span></div>';
+                    } else { html += '<div class="ban-slot"><span class="ban-letter">BAN</span><span class="ban-label">' +
+                            (i + 1) + '</span></div>'; }
                 }
                 html += '</div><div class="section-label">PICK 阵容</div><div class="pick-slots">';
                 let rp = [...state.redPicks].sort((a, b) => a.name.localeCompare(b.name, 'zh'));
@@ -1309,20 +1427,40 @@
                     let sc = null;
                     state.pickScores.forEach(s => { if (s.side === 'red' && s.pickNum === p._pickNum) sc = s; });
                     const cls = sc ? getScoreClass(sc.rating) : 'score-normal';
-                    const ah = p.avatar ? '<img src="' + p.avatar + '">' : '<div style="width:100%;height:100%;background:' + getColorFromName(p.name) + ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' + p.name.charAt(0) + '</div>';
-                    html += '<div class="pick-slot filled-red"><span class="pick-num">#' + p._pickNum + '</span><span class="pick-avatar">' + ah + '</span><span class="pick-name">' + p.name + '</span>' + (sc ? '<span class="pick-score ' + cls + '">' + sc.rating + ' ' + sc.score + '</span>' : '') + '</div>';
+                    const ah = p.avatar ? '<img src="' + p.avatar + '">' :
+                        '<div style="width:100%;height:100%;background:' + getColorFromName(p.name) +
+                        ';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:1.5rem;">' +
+                        p.name.charAt(0) + '</div>';
+                    html += '<div class="pick-slot filled-red"><span class="pick-num">#' + p._pickNum +
+                        '</span><span class="pick-avatar">' + ah + '</span><span class="pick-name">' + p.name +
+                        '</span>' + (sc ? '<span class="pick-score ' + cls + '">' + sc.rating + ' ' + sc.score +
+                            '</span>' : '') + '</div>';
                 });
-                for (let i = rp.length; i < 5; i++) html += '<div class="pick-slot"><span class="pick-num">-</span><span style="color:var(--text-dim)">待选</span></div>';
+                for (let i = rp.length; i < 5; i++) html +=
+                    '<div class="pick-slot"><span class="pick-num">-</span><span style="color:var(--text-dim)">待选</span></div>';
                 html += '</div></div></div>';
                 return html;
             }
 
             function renderDone() {
-                let html = '<div class="modal-overlay"><div class="modal" style="max-width:700px;"><h2>📋 BP最终阵容</h2><div class="roster-summary"><div class="roster-team"><h4 style="color:var(--blue-team)">🔵 蓝方</h4><div class="roster-list">';
-                state.bluePicks.forEach(p => { html += '<span class="roster-item">' + (p.avatar ? '<img src="' + p.avatar + '">' : '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' + getColorFromName(p.name) + ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + p.name.charAt(0) + '</span>') + p.name + '</span>'; });
-                html += '</div></div><div class="roster-team"><h4 style="color:var(--red-team)">🔴 红方</h4><div class="roster-list">';
-                state.redPicks.forEach(p => { html += '<span class="roster-item">' + (p.avatar ? '<img src="' + p.avatar + '">' : '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' + getColorFromName(p.name) + ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + p.name.charAt(0) + '</span>') + p.name + '</span>'; });
-                html += '</div></div></div><div style="text-align:center;margin-top:18px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-gold" id="btnBattle">⚔️ 开始对战推演</button><button class="btn btn-gray" id="btnBackBP">🔙 返回BP</button><button class="btn btn-gray" id="btnResetAll">🔄 重新开始</button></div></div></div>';
+                let html =
+                    '<div class="modal-overlay"><div class="modal" style="max-width:700px;"><h2>📋 BP最终阵容</h2><div class="roster-summary"><div class="roster-team"><h4 style="color:var(--blue-team)">🔵 蓝方</h4><div class="roster-list">';
+                state.bluePicks.forEach(p => { html += '<span class="roster-item">' + (p.avatar ? '<img src="' + p
+                        .avatar + '">' :
+                        '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' +
+                        getColorFromName(p.name) +
+                        ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + p.name.charAt(0) +
+                        '</span>') + p.name + '</span>'; });
+                html +=
+                    '</div></div><div class="roster-team"><h4 style="color:var(--red-team)">🔴 红方</h4><div class="roster-list">';
+                state.redPicks.forEach(p => { html += '<span class="roster-item">' + (p.avatar ? '<img src="' + p
+                        .avatar + '">' :
+                        '<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:' +
+                        getColorFromName(p.name) +
+                        ';color:#fff;text-align:center;line-height:20px;font-size:0.6rem;">' + p.name.charAt(0) +
+                        '</span>') + p.name + '</span>'; });
+                html +=
+                    '</div></div></div><div style="text-align:center;margin-top:18px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-gold" id="btnBattle">⚔️ 开始对战推演</button><button class="btn btn-gray" id="btnBackBP">🔙 返回BP</button><button class="btn btn-gray" id="btnResetAll">🔄 重新开始</button></div></div></div>';
                 return html;
             }
 
@@ -1331,49 +1469,71 @@
                 if (!res) return '<div style="text-align:center;padding:60px;">推演中...</div>';
                 const rc = res.result === 'blue' ? 'result-blue' : res.result === 'red' ? 'result-red' : 'result-draw';
                 const rt = res.result === 'blue' ? '🔵 蓝方胜利！' : res.result === 'red' ? '🔴 红方胜利！' : '🤝 平局！';
-                let html = '<div class="modal-overlay"><div class="modal" style="max-width:750px;"><h2>⚔️ 对战推演结果</h2><div class="battle-result ' + rc + '">' + rt + '</div>';
+                let html =
+                    '<div class="modal-overlay"><div class="modal" style="max-width:750px;"><h2>⚔️ 对战推演结果</h2><div class="battle-result ' +
+                    rc + '">' + rt + '</div>';
                 const mx = Math.max(res.bluePower, res.redPower);
-                html += '<div class="team-power-bar"><span style="color:var(--blue-team);font-weight:800">🔵 蓝方</span><div class="power-bar-track"><div class="power-bar-fill blue-fill" style="width:' + Math.min(100, res.bluePower / mx * 100) + '%"></div></div><span>' + res.bluePower.toFixed(0) + '</span></div>';
-                html += '<div class="team-power-bar"><span style="color:var(--red-team);font-weight:800">🔴 红方</span><div class="power-bar-track"><div class="power-bar-fill red-fill" style="width:' + Math.min(100, res.redPower / mx * 100) + '%"></div></div><span>' + res.redPower.toFixed(0) + '</span></div>';
+                html +=
+                    '<div class="team-power-bar"><span style="color:var(--blue-team);font-weight:800">🔵 蓝方</span><div class="power-bar-track"><div class="power-bar-fill blue-fill" style="width:' +
+                    Math.min(100, res.bluePower / mx * 100) + '%"></div></div><span>' + res.bluePower.toFixed(0) +
+                    '</span></div>';
+                html +=
+                    '<div class="team-power-bar"><span style="color:var(--red-team);font-weight:800">🔴 红方</span><div class="power-bar-track"><div class="power-bar-fill red-fill" style="width:' +
+                    Math.min(100, res.redPower / mx * 100) + '%"></div></div><span>' + res.redPower.toFixed(0) +
+                    '</span></div>';
                 html += '<h3>📜 战斗过程</h3><div class="battle-log">';
-                res.battleLog.forEach(line => { let cls = 'battle-event'; if (line.includes('蓝') && !line.includes('红')) cls = 'battle-blue'; if (line.includes('红') && !line.includes('蓝')) cls = 'battle-red';
+                res.battleLog.forEach(line => { let cls = 'battle-event'; if (line.includes('蓝') && !line.includes(
+                        '红')) cls = 'battle-blue'; if (line.includes('红') && !line.includes('蓝')) cls = 'battle-red';
                     html += '<div class="' + cls + '">' + line + '</div>'; });
-                html += '</div><div style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;"><button class="btn btn-gold" id="btnRematch">🔄 再来一局</button><button class="btn btn-gray" id="btnViewRoster">📋 查看阵容</button></div></div></div>';
+                html +=
+                    '</div><div style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;"><button class="btn btn-gold" id="btnRematch">🔄 再来一局</button><button class="btn btn-gray" id="btnViewRoster">📋 查看阵容</button></div></div></div>';
                 return html;
             }
 
             function bindEvents() {
                 if (state.phase === 'setup') {
                     document.getElementById('btnAddHeroSetup')?.addEventListener('click', () => showAddHeroModal(null));
-                    document.getElementById('btnClearAll')?.addEventListener('click', () => { if (confirm('确定清空英雄池？')) { state.allHeroes = [];
+                    document.getElementById('btnClearAll')?.addEventListener('click', () => { if (confirm(
+                            '确定清空英雄池？')) { state.allHeroes = [];
                             saveHeroes();
                             render(); } });
-                    document.getElementById('btnExport')?.addEventListener('click', () => { const blob = new Blob([JSON.stringify(state.allHeroes, null, 2)], { type: 'application/json' }); const a = document.createElement('a');
+                    document.getElementById('btnExport')?.addEventListener('click', () => { const blob = new Blob([
+                            JSON.stringify(state.allHeroes, null, 2)
+                        ], { type: 'application/json' }); const a = document.createElement('a');
                         a.href = URL.createObjectURL(blob);
                         a.download = '宇宙BP英雄池.json';
                         a.click();
                         URL.revokeObjectURL(a.href); });
-                    document.getElementById('btnStartBP')?.addEventListener('click', () => { if (state.allHeroes.length < 10) alert('⚠️ 英雄池至少需要10名英雄'); else { state.phase = 'bp';
+                    document.getElementById('btnStartBP')?.addEventListener('click', () => { if (state.allHeroes.length <
+                            10) alert('⚠️ 英雄池至少需要10名英雄'); else { state.phase = 'bp';
                             state.currentStep = 0;
                             state.selectedHero = null;
                             addLog('🎮 BP正式开始！');
                             render(); } });
-                    document.querySelectorAll('.edit-btn-small').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const h = state.allHeroes.find(x => x.id === b.dataset.editId); if (h) showAddHeroModal(h); }));
-                    document.querySelectorAll('.del-btn-small').forEach(b => b.addEventListener('click', e => { e.stopPropagation();
+                    document.querySelectorAll('.edit-btn-small').forEach(b => b.addEventListener('click', e => { e
+                            .stopPropagation(); const h = state.allHeroes.find(x => x.id === b.dataset.editId); if (h)
+                            showAddHeroModal(h); }));
+                    document.querySelectorAll('.del-btn-small').forEach(b => b.addEventListener('click', e => { e
+                            .stopPropagation();
                         deleteHero(b.dataset.delId); }));
                 } else if (state.phase === 'bp') {
                     const grid = document.getElementById('heroGrid');
                     if (grid) {
-                        grid.querySelectorAll('.champ-card:not(.banned):not(.picked)').forEach(el => el.addEventListener('click', function() { const hid = this.dataset.heroId;
-                            state.allHeroes.forEach(h => { if (h.id === hid) state.selectedHero = h; });
-                            render(); }));
-                        grid.querySelectorAll('.edit-btn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const h = state.allHeroes.find(x => x.id === b.dataset.editId); if (h) showAddHeroModal(h); }));
-                        grid.querySelectorAll('.del-btn').forEach(b => b.addEventListener('click', e => { e.stopPropagation();
+                        grid.querySelectorAll('.champ-card:not(.banned):not(.picked)').forEach(el => el.addEventListener(
+                            'click', function() { const hid = this.dataset.heroId;
+                                state.allHeroes.forEach(h => { if (h.id === hid) state.selectedHero = h; });
+                                render(); }));
+                        grid.querySelectorAll('.edit-btn').forEach(b => b.addEventListener('click', e => { e
+                                .stopPropagation(); const h = state.allHeroes.find(x => x.id === b.dataset
+                                .editId); if (h) showAddHeroModal(h); }));
+                        grid.querySelectorAll('.del-btn').forEach(b => b.addEventListener('click', e => { e
+                                .stopPropagation();
                             deleteHero(b.dataset.delId); }));
                     }
                     const catBar = document.getElementById('catBar');
-                    if (catBar) catBar.querySelectorAll('.category-filter-btn').forEach(b => b.addEventListener('click', function() { state.activeCategoryFilter = this.dataset.cat === '' ? null : this.dataset.cat;
-                        render(); }));
+                    if (catBar) catBar.querySelectorAll('.category-filter-btn').forEach(b => b.addEventListener('click',
+                        function() { state.activeCategoryFilter = this.dataset.cat === '' ? null : this.dataset.cat;
+                            render(); }));
                     document.getElementById('btnAddHeroBP')?.addEventListener('click', () => showAddHeroModal(null));
                     document.getElementById('btnAddHeroEmpty')?.addEventListener('click', () => showAddHeroModal(null));
                     document.getElementById('btnClearSel')?.addEventListener('click', () => { state.selectedHero = null;
@@ -1381,7 +1541,8 @@
                     document.getElementById('btnConfirmBlue')?.addEventListener('click', () => confirmAction('blue'));
                     document.getElementById('btnConfirmRed')?.addEventListener('click', () => confirmAction('red'));
                 } else if (state.phase === 'done') {
-                    document.getElementById('btnBattle')?.addEventListener('click', () => { state.battleResult = runBattle();
+                    document.getElementById('btnBattle')?.addEventListener('click', () => { state.battleResult =
+                            runBattle();
                         state.phase = 'battle';
                         render(); });
                     document.getElementById('btnBackBP')?.addEventListener('click', () => { state.phase = 'bp';
@@ -1398,7 +1559,8 @@
             function deleteHero(id) {
                 const hero = state.allHeroes.find(h => h.id === id);
                 if (!hero) return;
-                const isUsed = state.blueBans.some(h => h.id === id) || state.redBans.some(h => h.id === id) || state.bluePicks.some(h => h.id === id) || state.redPicks.some(h => h.id === id);
+                const isUsed = state.blueBans.some(h => h.id === id) || state.redBans.some(h => h.id === id) || state
+                    .bluePicks.some(h => h.id === id) || state.redPicks.some(h => h.id === id);
                 if (isUsed) { alert('该英雄已被Ban或Pick，无法删除。请先完成或重置对局。'); return; }
                 if (confirm('确定要删除英雄「' + hero.name + '」吗？')) {
                     state.allHeroes = state.allHeroes.filter(h => h.id !== id);
@@ -1446,7 +1608,6 @@
                 state.pickScores = [];
                 state.battleResult = null;
                 state.activeCategoryFilter = null;
-                loadHeroes();
                 render();
             }
 
@@ -1454,14 +1615,24 @@
                 const overlay = document.createElement('div');
                 overlay.className = 'modal-overlay';
                 let catOptions = state.categories.map(c => '<option value="' + c + '">').join('');
-                overlay.innerHTML = '<div class="modal" style="max-width:680px;"><h2>' + (heroToEdit ? '✏️ 编辑英雄' : '➕ 添加自定义英雄') + '</h2><div class="custom-form">' +
-                    '<div><label>英雄名称 *</label><input type="text" id="chName" maxlength="20" value="' + (heroToEdit ? heroToEdit.name : '') + '"></div>' +
-                    '<div><label>分类（可自定义）</label><input type="text" id="chCategory" list="categoryList" value="' + (heroToEdit ? heroToEdit.category : '') + '"><datalist id="categoryList">' + catOptions + '</datalist></div>' +
-                    '<div class="full-width"><label>头像（上传全身照，将自动裁剪为头部显示）</label><div class="avatar-upload-area"><div class="avatar-preview" id="avatarPreview">' + (heroToEdit ? (heroToEdit.avatar ? '<img src="' + heroToEdit.avatar + '" style="width:100%;height:100%;object-fit:cover;object-position:top center;">' : heroToEdit.name.charAt(0)) : '?') + '</div><button class="upload-btn" id="btnUploadAvatar">📁 选择图片</button><input type="file" id="fileInput" accept="image/*" style="display:none;"><button class="upload-btn" id="btnRemoveAvatar">🗑️ 清除</button></div></div>' +
-                    '<div class="full-width"><label>标签（逗号分隔，用于战力与克制）</label><input type="text" id="chTags" value="' + (heroToEdit ? (heroToEdit.tags || []).join(',') : '') + '"></div></div>' +
-                    '<div style="text-align:center;margin-top:14px;display:flex;gap:8px;justify-content:center;"><button class="btn btn-gold" id="btnSaveHero">💾 ' + (heroToEdit ? '保存修改' : '保存英雄') + '</button><button class="btn btn-gray" id="btnCancelHero">取消</button></div></div>';
+                overlay.innerHTML = '<div class="modal" style="max-width:680px;"><h2>' + (heroToEdit ? '✏️ 编辑英雄' :
+                        '➕ 添加自定义英雄') + '</h2><div class="custom-form">' +
+                    '<div><label>英雄名称 *</label><input type="text" id="chName" maxlength="20" value="' + (heroToEdit ?
+                        heroToEdit.name : '') + '"></div>' +
+                    '<div><label>分类（可自定义）</label><input type="text" id="chCategory" list="categoryList" value="' +
+                    (heroToEdit ? heroToEdit.category : '') + '"><datalist id="categoryList">' + catOptions +
+                    '</datalist></div>' +
+                    '<div class="full-width"><label>头像（上传全身照，将自动裁剪为头部显示）</label><div class="avatar-upload-area"><div class="avatar-preview" id="avatarPreview">' +
+                    (heroToEdit ? (heroToEdit.avatar ? '<img src="' + heroToEdit.avatar +
+                        '" style="width:100%;height:100%;object-fit:cover;object-position:top center;">' : heroToEdit
+                        .name.charAt(0)) : '?') +
+                    '</div><button class="upload-btn" id="btnUploadAvatar">📁 选择图片</button><input type="file" id="fileInput" accept="image/*" style="display:none;"><button class="upload-btn" id="btnRemoveAvatar">🗑️ 清除</button></div></div>' +
+                    '<div class="full-width"><label>标签（逗号分隔，用于战力与克制）</label><input type="text" id="chTags" value="' +
+                    (heroToEdit ? (heroToEdit.tags || []).join(',') : '') + '"></div></div>' +
+                    '<div style="text-align:center;margin-top:14px;display:flex;gap:8px;justify-content:center;"><button class="btn btn-gold" id="btnSaveHero">💾 ' +
+                    (heroToEdit ? '保存修改' : '保存英雄') +
+                    '</button><button class="btn btn-gray" id="btnCancelHero">取消</button></div></div>';
                 document.body.appendChild(overlay);
-
                 let avatarDataUrl = heroToEdit ? heroToEdit.avatar : null;
                 const fileInput = overlay.querySelector('#fileInput');
                 const preview = overlay.querySelector('#avatarPreview');
@@ -1470,7 +1641,8 @@
 
                 function updatePreview() {
                     if (avatarDataUrl) {
-                        preview.innerHTML = '<img src="' + avatarDataUrl + '" style="width:100%;height:100%;object-fit:cover;object-position:top center;">';
+                        preview.innerHTML = '<img src="' + avatarDataUrl +
+                            '" style="width:100%;height:100%;object-fit:cover;object-position:top center;">';
                     } else {
                         const n = overlay.querySelector('#chName').value.trim() || '?';
                         preview.textContent = n.charAt(0);
@@ -1515,9 +1687,9 @@
                     const cat = overlay.querySelector('#chCategory').value.trim();
                     const tags = overlay.querySelector('#chTags').value.trim();
                     if (!name) { alert('请输入英雄名称！'); return; }
-                    if (cat && !state.categories.includes(cat)) { state.categories.push(cat);
-                        saveCategories(); }
-                    const data = { name, category: cat || '未分类', avatar: avatarDataUrl, tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [] };
+                    if (cat && !state.categories.includes(cat)) { state.categories.push(cat); }
+                    const data = { name, category: cat || '未分类', avatar: avatarDataUrl, tags: tags ? tags.split(',')
+                            .map(t => t.trim()).filter(Boolean) : [] };
                     if (heroToEdit) {
                         const idx = state.allHeroes.findIndex(h => h.id === heroToEdit.id);
                         if (idx !== -1) state.allHeroes[idx] = { ...state.allHeroes[idx], ...data };
@@ -1530,17 +1702,21 @@
                     overlay.remove();
                     render();
                 });
-                overlay.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') overlay.querySelector('#btnSaveHero').click(); }));
+                overlay.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => { if (e.key ===
+                        'Enter') overlay.querySelector('#btnSaveHero').click(); }));
             }
 
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') { state.selectedHero = null;
                     render(); }
-                if (e.key === 'Enter' && state.phase === 'bp' && state.selectedHero) { const s = getCurrentStep(); if (s) confirmAction(s.side); }
+                if (e.key === 'Enter' && state.phase === 'bp' && state.selectedHero) { const s = getCurrentStep(); if (s)
+                        confirmAction(s.side); }
             });
 
-            loadHeroes();
-            render();
+            // 初始化：加载云端数据并启动实时同步
+            loadHeroes().then(() => {
+                startRealtimeSync();
+            });
         })();
     </script>
 </body>
